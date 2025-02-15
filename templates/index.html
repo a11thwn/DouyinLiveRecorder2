@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>抖音直播录制控制台</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        #logArea {
+            height: 400px;
+            overflow-y: auto;
+            background-color: #f8f9fa;
+            padding: 10px;
+            font-family: monospace;
+            white-space: pre-wrap;
+        }
+        .status-indicator {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 5px;
+        }
+        .status-running {
+            background-color: #28a745;
+        }
+        .status-stopped {
+            background-color: #dc3545;
+        }
+        .url-row {
+            display: flex;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .url-row .form-control {
+            margin-right: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container mt-4">
+        <h1 class="mb-4">抖音直播录制控制台</h1>
+        
+        <!-- 状态和控制按钮 -->
+        <div class="card mb-4">
+            <div class="card-body">
+                <h5 class="card-title">程序状态</h5>
+                <div class="d-flex align-items-center mb-3">
+                    <div class="status-indicator" id="statusIndicator"></div>
+                    <span id="statusText">正在检查状态...</span>
+                </div>
+                <button class="btn btn-success me-2" id="startBtn">启动程序</button>
+                <button class="btn btn-danger" id="stopBtn">停止程序</button>
+            </div>
+        </div>
+
+        <!-- 配置编辑按钮 -->
+        <div class="card mb-4">
+            <div class="card-body">
+                <h5 class="card-title">配置管理</h5>
+                <button class="btn btn-primary me-2" onclick="showMainConfigEditor()">编辑主配置</button>
+                <button class="btn btn-primary" onclick="showUrlConfigEditor()">编辑URL配置</button>
+            </div>
+        </div>
+
+        <!-- 日志显示区域 -->
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">程序输出</h5>
+                <div id="logArea"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 主配置编辑模态框 -->
+    <div class="modal fade" id="mainConfigModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">编辑主配置</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div id="mainConfigEditor">
+                        <!-- 动态加载的配置表单 -->
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" onclick="saveMainConfig()">保存</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- URL配置编辑模态框 -->
+    <div class="modal fade" id="urlConfigModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">编辑URL配置</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">每行一个URL，格式：URL地址,主播: 名称</label>
+                        <textarea id="urlConfigEditor" class="form-control" rows="10" style="font-family: monospace;"></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" onclick="saveUrlConfig()">保存</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.socket.io/4.0.1/socket.io.min.js"></script>
+    <script src="/static/js/main.js"></script>
+</body>
+</html> 
