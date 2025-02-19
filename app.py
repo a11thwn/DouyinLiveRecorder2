@@ -340,6 +340,53 @@ def start_recorder():
         logging.error(f'启动程序时发生错误: {str(e)}')
         return {'status': 'error', 'message': f'启动程序时发生错误: {str(e)}'}
 
+def setup_virtual_environment():
+    """
+    设置虚拟环境并安装依赖
+    Returns:
+        bool: 是否成功设置虚拟环境
+    """
+    try:
+        cwd = os.path.dirname(os.path.abspath(__file__))
+        venv_path = os.path.join(cwd, 'venv')
+        
+        # 检查虚拟环境是否已存在
+        if not os.path.exists(venv_path):
+            logger.info("Creating virtual environment...")
+            import venv
+            venv.create(venv_path, with_pip=True)
+            logger.info("Virtual environment created successfully")
+        
+        # 获取虚拟环境的Python和pip路径
+        if sys.platform == 'win32':
+            venv_python = os.path.join(venv_path, 'Scripts', 'python.exe')
+            venv_pip = os.path.join(venv_path, 'Scripts', 'pip.exe')
+        else:
+            venv_python = os.path.join(venv_path, 'bin', 'python')
+            venv_pip = os.path.join(venv_path, 'bin', 'pip')
+        
+        # 检查requirements.txt是否存在
+        requirements_file = os.path.join(cwd, 'requirements.txt')
+        if not os.path.exists(requirements_file):
+            logger.error("requirements.txt not found")
+            return False
+        
+        # 安装依赖
+        logger.info("Installing dependencies...")
+        subprocess.run([venv_pip, 'install', '-r', requirements_file], check=True)
+        logger.info("Dependencies installed successfully")
+        
+        return True
+    except Exception as e:
+        logger.error(f"Error setting up virtual environment: {str(e)}", exc_info=True)
+        return False
+
 if __name__ == '__main__':
     logger.info("Starting Flask application")
+    
+    # 设置虚拟环境
+    if not setup_virtual_environment():
+        logger.error("Failed to setup virtual environment. Exiting...")
+        sys.exit(1)
+    
     socketio.run(app, debug=True, host='0.0.0.0', port=5678) 
