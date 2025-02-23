@@ -107,11 +107,31 @@ function showUrlConfigEditor() {
     urlConfigModal.show();
 }
 
+// 处理未认证的响应
+function handleUnauthenticated(response) {
+    if (response.redirected && response.url.includes('/login')) {
+        window.location.href = response.url;
+        return true;
+    }
+    return false;
+}
+
 // 保存主配置
 async function saveMainConfig() {
     const newMainConfig = collectMainConfigForm();
     
     try {
+        // 验证配置数据
+        if (!newMainConfig || Object.keys(newMainConfig).length === 0) {
+            throw new Error('配置数据不能为空');
+        }
+        
+        // 显示保存中提示
+        const saveButton = document.querySelector('#mainConfigModal .btn-primary');
+        const originalText = saveButton.textContent;
+        saveButton.textContent = '保存中...';
+        saveButton.disabled = true;
+        
         const response = await fetch('/api/config', {
             method: 'POST',
             headers: {
@@ -122,16 +142,27 @@ async function saveMainConfig() {
             })
         });
         
+        if (handleUnauthenticated(response)) return;
+        
         const data = await response.json();
         if (data.status === 'success') {
             currentConfig.main_config = newMainConfig;
             mainConfigModal.hide();
-            alert('配置保存成功');
+            addLog('主配置保存成功');
         } else {
-            alert('配置保存失败: ' + data.message);
+            throw new Error(data.message || '未知错误');
         }
     } catch (error) {
-        alert('配置保存失败: ' + error.message);
+        console.error('保存主配置失败:', error);
+        addLog('错误: 保存主配置失败 - ' + error.message);
+        alert('保存主配置失败: ' + error.message);
+    } finally {
+        // 恢复保存按钮状态
+        const saveButton = document.querySelector('#mainConfigModal .btn-primary');
+        if (saveButton) {
+            saveButton.textContent = '保存';
+            saveButton.disabled = false;
+        }
     }
 }
 
@@ -140,6 +171,17 @@ async function saveUrlConfig() {
     const newUrlConfig = collectUrlConfig();
     
     try {
+        // 验证配置数据
+        if (!newUrlConfig || !newUrlConfig.content) {
+            throw new Error('URL配置内容不能为空');
+        }
+        
+        // 显示保存中提示
+        const saveButton = document.querySelector('#urlConfigModal .btn-primary');
+        const originalText = saveButton.textContent;
+        saveButton.textContent = '保存中...';
+        saveButton.disabled = true;
+        
         const response = await fetch('/api/config', {
             method: 'POST',
             headers: {
@@ -150,16 +192,27 @@ async function saveUrlConfig() {
             })
         });
         
+        if (handleUnauthenticated(response)) return;
+        
         const data = await response.json();
         if (data.status === 'success') {
             currentConfig.url_config = newUrlConfig;
             urlConfigModal.hide();
-            alert('URL配置保存成功');
+            addLog('URL配置保存成功');
         } else {
-            alert('URL配置保存失败: ' + data.message);
+            throw new Error(data.message || '未知错误');
         }
     } catch (error) {
-        alert('URL配置保存失败: ' + error.message);
+        console.error('保存URL配置失败:', error);
+        addLog('错误: 保存URL配置失败 - ' + error.message);
+        alert('保存URL配置失败: ' + error.message);
+    } finally {
+        // 恢复保存按钮状态
+        const saveButton = document.querySelector('#urlConfigModal .btn-primary');
+        if (saveButton) {
+            saveButton.textContent = '保存';
+            saveButton.disabled = false;
+        }
     }
 }
 
@@ -197,6 +250,8 @@ function addLog(message) {
 startBtn.addEventListener('click', async () => {
     try {
         const response = await fetch('/api/control/start', { method: 'POST' });
+        if (handleUnauthenticated(response)) return;
+        
         const data = await response.json();
         if (data.status === 'success') {
             updateStatus(true);
@@ -211,6 +266,8 @@ startBtn.addEventListener('click', async () => {
 stopBtn.addEventListener('click', async () => {
     try {
         const response = await fetch('/api/control/stop', { method: 'POST' });
+        if (handleUnauthenticated(response)) return;
+        
         const data = await response.json();
         if (data.status === 'success') {
             updateStatus(false);
@@ -236,12 +293,29 @@ socket.on('disconnect', () => {
 socket.on('status', (data) => {
     console.log('收到状态更新:', data);
     updateStatus(data.is_running);
+    
+    // 如果状态变为停止，禁用停止按钮
+    if (!data.is_running) {
+        stopBtn.disabled = true;
+    }
 });
 
 socket.on('log', (data) => {
     console.log('收到日志:', data);
     if (data && data.data) {
         addLog(data.data);
+        
+        // 如果是重启相关的消息，更新UI状态
+        if (data.data.includes('正在重启程序')) {
+            startBtn.disabled = true;
+            stopBtn.disabled = true;
+        } else if (data.data.includes('程序已重启')) {
+            startBtn.disabled = true;
+            stopBtn.disabled = false;
+        } else if (data.data.includes('重启失败')) {
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+        }
     }
 });
 
@@ -254,11 +328,15 @@ async function init() {
         
         // 获取配置
         const response = await fetch('/api/config');
+        if (handleUnauthenticated(response)) return;
+        
         const config = await response.json();
         currentConfig = config;
         
         // 获取初始状态
         const statusResponse = await fetch('/api/status');
+        if (handleUnauthenticated(statusResponse)) return;
+        
         const statusData = await statusResponse.json();
         updateStatus(statusData.is_running);
         

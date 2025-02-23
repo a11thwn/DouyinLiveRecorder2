@@ -18,8 +18,13 @@ import subprocess
 import threading
 import logging
 from pathlib import Path
-from flask import Flask, render_template, jsonify, request
+from functools import wraps
+from flask import Flask, render_template, jsonify, request, session, redirect, url_for
 from flask_socketio import SocketIO, emit
+from dotenv import load_dotenv
+
+# 加载.env文件
+load_dotenv()
 
 # 配置日志
 logging.basicConfig(level=logging.DEBUG,
@@ -59,11 +64,12 @@ def read_config(config_file):
                 content = f.read()
             return {'content': content}
         except Exception as e:
-            print(f"Error reading URL config file: {e}")
+            logger.error(f"Error reading URL config file: {e}")
             return {'content': ''}
 
     # 主配置文件使用INI格式处理
     config = configparser.ConfigParser(interpolation=None)
+    config.optionxform = str  # 保持键名的大小写
     try:
         # 先尝试直接读取
         config.read(config_file, encoding='utf-8')
@@ -72,7 +78,7 @@ def read_config(config_file):
         with open(config_file, 'r', encoding='utf-8-sig') as f:
             config.read_file(f)
     except Exception as e:
-        print(f"Error reading config file {config_file}: {e}")
+        logger.error(f"Error reading config file {config_file}: {e}")
         return {}
 
     result = {}
@@ -89,19 +95,31 @@ def save_config(config_file, config_data):
         config_file: 配置文件路径
         config_data: 配置内容的字典
     """
-    # 如果是URL配置文件，直接保存文本内容
-    if config_file == URL_CONFIG:
-        try:
-            content = config_data.get('content', '')
-            with open(config_file, 'w', encoding='utf-8') as f:
-                f.write(content)
-            return
-        except Exception as e:
-            print(f"Error saving URL config file: {e}")
-            raise
-
-    # 主配置文件使用INI格式保存
     try:
+        # 确保配置目录存在
+        config_dir = config_file.parent
+        config_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Ensuring config directory exists: {config_dir}")
+        
+        # 如果是URL配置文件，直接保存文本内容
+        if config_file == URL_CONFIG:
+            try:
+                content = config_data.get('content', '')
+                if not isinstance(content, str):
+                    raise ValueError(f"Invalid content type: {type(content)}, expected string")
+                    
+                logger.info(f"Saving URL config to: {config_file}")
+                with open(config_file, 'w', encoding='utf-8') as f:
+                    f.write(content)
+                logger.info("URL config saved successfully")
+                return
+                
+            except Exception as e:
+                error_msg = f"Error saving URL config file: {str(e)}"
+                logger.error(error_msg, exc_info=True)
+                raise ValueError(error_msg)
+
+        # 主配置文件使用INI格式保存
         config = configparser.ConfigParser(interpolation=None)
         config.optionxform = str  # 保持键名的大小写
         
@@ -113,18 +131,58 @@ def save_config(config_file, config_data):
                 config.set(section, key, str(value))
         
         # 保存到文件
+        logger.info(f"Saving main config to: {config_file}")
         with open(config_file, 'w', encoding='utf-8') as f:
             config.write(f)
+        logger.info("Main config saved successfully")
+        
     except Exception as e:
-        print(f"Error saving config file {config_file}: {e}")
-        raise
+        error_msg = f"Error saving config file {config_file}: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        raise ValueError(error_msg)
+
+# 获取访问密码
+ACCESS_PASSWORD = os.getenv('ACCESS_PASSWORD')
+if not ACCESS_PASSWORD:
+    logger.error("ACCESS_PASSWORD not set in .env file")
+    sys.exit(1)
+
+def login_required(f):
+    """
+    验证登录状态的装饰器
+    """
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not session.get('authenticated'):
+            return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    """登录页面"""
+    if request.method == 'POST':
+        password = request.form.get('password')
+        if password == ACCESS_PASSWORD:
+            session['authenticated'] = True
+            return redirect(url_for('index'))
+        return render_template('login.html', error='密码错误')
+    return render_template('login.html')
+
+@app.route('/logout')
+def logout():
+    """登出"""
+    session.pop('authenticated', None)
+    return redirect(url_for('login'))
 
 @app.route('/')
+@login_required
 def index():
     """主页路由"""
     return render_template('index.html')
 
 @app.route('/api/config', methods=['GET'])
+@login_required
 def get_config():
     """获取配置内容"""
     main_config = read_config(MAIN_CONFIG)
@@ -135,19 +193,63 @@ def get_config():
     })
 
 @app.route('/api/config', methods=['POST'])
+@login_required
 def update_config():
     """更新配置内容"""
+    global recorder_process, is_running
     try:
         data = request.get_json()
+        if data is None:
+            raise ValueError("No JSON data received")
+            
+        logger.info("Received config update request")
+        need_restart = is_running
+        
         if 'main_config' in data:
+            logger.info("Updating main config")
             save_config(MAIN_CONFIG, data['main_config'])
+            
         if 'url_config' in data:
+            logger.info("Updating URL config")
             save_config(URL_CONFIG, data['url_config'])
+        
+        # 如果程序正在运行，则重启程序以加载新配置
+        if need_restart:
+            logger.info("Configuration updated while recorder is running, restarting process...")
+            try:
+                # 停止当前进程
+                if recorder_process:
+                    logger.info("Stopping current process...")
+                    recorder_process.terminate()
+                    recorder_process.wait(timeout=5)
+                    is_running = False
+                    socketio.emit('status', {'is_running': False})
+                    socketio.emit('log', {'data': '配置已更新，正在重启程序...'})
+                
+                # 启动新进程
+                result = start_recorder()
+                if result['status'] == 'success':
+                    logger.info("Process restarted successfully")
+                    socketio.emit('log', {'data': '程序已重启，新配置已生效'})
+                else:
+                    logger.error(f"Failed to restart process: {result['message']}")
+                    socketio.emit('log', {'data': f"错误: 重启失败 - {result['message']}"})
+            except Exception as e:
+                error_msg = f"Error during restart: {str(e)}"
+                logger.error(error_msg, exc_info=True)
+                socketio.emit('log', {'data': f"错误: {error_msg}"})
+                raise
+        else:
+            socketio.emit('log', {'data': '配置已更新'})
+            
         return jsonify({'status': 'success'})
     except Exception as e:
-        return jsonify({'status': 'error', 'message': str(e)}), 400
+        error_msg = str(e)
+        logger.error(f"Config update failed: {error_msg}", exc_info=True)
+        return jsonify({'status': 'error', 'message': error_msg}), 400
 
 @app.route('/api/control/<action>', methods=['POST'])
+@login_required
 def control_recorder(action):
     """
     控制录制程序
@@ -229,6 +331,7 @@ def control_recorder(action):
     return jsonify({'status': 'error', 'message': '无效的操作'}), 400
 
 @app.route('/api/status')
+@login_required
 def get_status():
     """获取录制程序状态"""
     return jsonify({
@@ -238,6 +341,8 @@ def get_status():
 @socketio.on('connect')
 def handle_connect():
     """处理WebSocket连接"""
+    if not session.get('authenticated'):
+        return False
     emit('status', {'is_running': is_running})
 
 def monitor_output(process):
@@ -286,7 +391,7 @@ def monitor_output(process):
             pass
 
 def start_recorder():
-    global recorder_process, log_monitor_thread
+    global recorder_process, log_monitor_thread, is_running
     try:
         if recorder_process and recorder_process.poll() is None:
             return {'status': 'error', 'message': '程序已经在运行中'}
@@ -297,28 +402,22 @@ def start_recorder():
         if not os.path.exists(main_py):
             return {'status': 'error', 'message': '找不到 main.py 文件'}
 
-        # 使用系统 Python3 解释器
-        python_paths = ['/usr/local/bin/python3', '/usr/bin/python3', 'python3']
-        python_path = None
-        for path in python_paths:
-            if os.path.exists(path) or os.system(f'which {path} > /dev/null 2>&1') == 0:
-                python_path = path
-                break
-        
-        if not python_path:
-            return {'status': 'error', 'message': '找不到 Python3 解释器'}
+        # 使用虚拟环境的Python解释器
+        venv_python = os.path.join(cwd, 'venv', 'bin', 'python')
+        if not os.path.exists(venv_python):
+            return {'status': 'error', 'message': '找不到虚拟环境Python解释器'}
 
         # 设置环境变量
         env = os.environ.copy()
-        env['PYTHONPATH'] = cwd  # 添加当前目录到 Python 路径
-        if 'VIRTUAL_ENV' in env:
-            env['PATH'] = f"{os.path.join(env['VIRTUAL_ENV'], 'bin')}:{env['PATH']}"
+        env['PYTHONPATH'] = cwd  # 添加当前目录到Python路径
+        env['VIRTUAL_ENV'] = os.path.join(cwd, 'venv')
+        env['PATH'] = f"{os.path.join(env['VIRTUAL_ENV'], 'bin')}:{env.get('PATH', '')}"
 
         # 启动进程
-        cmd = [python_path, main_py]
-        logging.info(f'Starting recorder with command: {cmd}')
-        logging.info(f'Working directory: {cwd}')
-        logging.info(f'Environment: PYTHONPATH={env.get("PYTHONPATH")}, PATH={env.get("PATH")}')
+        cmd = [venv_python, '-u', main_py]  # 添加 -u 参数禁用输出缓冲
+        logger.info(f'Starting recorder with command: {cmd}')
+        logger.info(f'Working directory: {cwd}')
+        logger.info(f'Environment: PYTHONPATH={env.get("PYTHONPATH")}, PATH={env.get("PATH")}')
         
         recorder_process = subprocess.Popen(
             cmd,
@@ -330,6 +429,9 @@ def start_recorder():
             bufsize=1
         )
 
+        logger.info(f"Process started with PID: {recorder_process.pid}")
+        is_running = True
+
         # 启动日志监控线程
         log_monitor_thread = threading.Thread(target=monitor_output, args=(recorder_process,))
         log_monitor_thread.daemon = True
@@ -337,8 +439,9 @@ def start_recorder():
 
         return {'status': 'success', 'message': '程序已启动'}
     except Exception as e:
-        logging.error(f'启动程序时发生错误: {str(e)}')
-        return {'status': 'error', 'message': f'启动程序时发生错误: {str(e)}'}
+        error_msg = f'启动程序时发生错误: {str(e)}'
+        logger.error(error_msg, exc_info=True)
+        return {'status': 'error', 'message': error_msg}
 
 def setup_virtual_environment():
     """
