@@ -22,6 +22,7 @@ from functools import wraps
 from flask import Flask, render_template, jsonify, request, session, redirect, url_for
 from flask_socketio import SocketIO, emit
 from dotenv import load_dotenv
+import re
 
 # 加载.env文件
 load_dotenv()
@@ -196,51 +197,22 @@ def get_config():
 @login_required
 def update_config():
     """更新配置内容"""
-    global recorder_process, is_running
     try:
         data = request.get_json()
         if data is None:
             raise ValueError("No JSON data received")
             
         logger.info("Received config update request")
-        need_restart = is_running
         
         if 'main_config' in data:
             logger.info("Updating main config")
             save_config(MAIN_CONFIG, data['main_config'])
+            socketio.emit('log', {'data': '主配置已更新'})
             
         if 'url_config' in data:
             logger.info("Updating URL config")
             save_config(URL_CONFIG, data['url_config'])
-        
-        # 如果程序正在运行，则重启程序以加载新配置
-        if need_restart:
-            logger.info("Configuration updated while recorder is running, restarting process...")
-            try:
-                # 停止当前进程
-                if recorder_process:
-                    logger.info("Stopping current process...")
-                    recorder_process.terminate()
-                    recorder_process.wait(timeout=5)
-                    is_running = False
-                    socketio.emit('status', {'is_running': False})
-                    socketio.emit('log', {'data': '配置已更新，正在重启程序...'})
-                
-                # 启动新进程
-                result = start_recorder()
-                if result['status'] == 'success':
-                    logger.info("Process restarted successfully")
-                    socketio.emit('log', {'data': '程序已重启，新配置已生效'})
-                else:
-                    logger.error(f"Failed to restart process: {result['message']}")
-                    socketio.emit('log', {'data': f"错误: 重启失败 - {result['message']}"})
-            except Exception as e:
-                error_msg = f"Error during restart: {str(e)}"
-                logger.error(error_msg, exc_info=True)
-                socketio.emit('log', {'data': f"错误: {error_msg}"})
-                raise
-        else:
-            socketio.emit('log', {'data': '配置已更新'})
+            socketio.emit('log', {'data': 'URL配置已更新'})
             
         return jsonify({'status': 'success'})
     except Exception as e:
@@ -345,6 +317,18 @@ def handle_connect():
         return False
     emit('status', {'is_running': is_running})
 
+def clean_ansi_escape_sequences(text):
+    """
+    清理文本中的ANSI转义序列
+    Args:
+        text: 原始文本
+    Returns:
+        清理后的文本
+    """
+    # 匹配所有ANSI转义序列
+    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+    return ansi_escape.sub('', text)
+
 def monitor_output(process):
     """
     监控进程输出的线程函数
@@ -362,11 +346,12 @@ def monitor_output(process):
         # 使用迭代器读取输出，这样可以实时获取输出
         for line in iter(process.stdout.readline, ''):
             if line:
-                line = line.strip()
-                if line:  # 确保不是空行
-                    logger.info(f"Process output: {line}")
+                # 清理ANSI转义序列
+                cleaned_line = clean_ansi_escape_sequences(line.strip())
+                if cleaned_line:  # 确保不是空行
+                    logger.info(f"Process output: {cleaned_line}")
                     # 使用 emit 发送日志到前端
-                    socketio.emit('log', {'data': line})
+                    socketio.emit('log', {'data': cleaned_line})
             
             # 检查进程是否已经结束
             if process.poll() is not None:
