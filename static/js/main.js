@@ -171,11 +171,6 @@ async function saveUrlConfig() {
     const newUrlConfig = collectUrlConfig();
     
     try {
-        // 验证配置数据
-        if (!newUrlConfig || !newUrlConfig.content) {
-            throw new Error('URL配置内容不能为空');
-        }
-        
         // 显示保存中提示
         const saveButton = document.querySelector('#urlConfigModal .btn-primary');
         const originalText = saveButton.textContent;

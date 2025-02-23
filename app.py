@@ -107,7 +107,7 @@ def save_config(config_file, config_data):
             try:
                 content = config_data.get('content', '')
                 if not isinstance(content, str):
-                    raise ValueError(f"Invalid content type: {type(content)}, expected string")
+                    content = ''  # 如果内容不是字符串类型，设置为空字符串
                     
                 logger.info(f"Saving URL config to: {config_file}")
                 with open(config_file, 'w', encoding='utf-8') as f:
